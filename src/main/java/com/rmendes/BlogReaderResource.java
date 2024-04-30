@@ -16,42 +16,46 @@ import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.TokenStream;
+import io.quarkus.runtime.Startup;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
+@Startup
 @Path("/")
 public class BlogReaderResource {
 	
 	private static final Logger LOGGER = LoggerFactory.getLogger(BlogReaderResource.class);
 	
-	private final LLMService llmService;
+	private LLMService llmService;
 	
-	private final BlogCrawler crawler;
+	@Inject
+	private BlogCrawler crawler;
 	
-	private final RequestSplitter splitter;
+	@Inject
+	private RequestSplitter splitter;
 	
-	private final StreamingChatLanguageModel languageModel;
+	private StreamingChatLanguageModel languageModel;
 	
 	private static final String modelUrl = "http://localhost:11434";
 	
 	private static final String modelName = "llama2";
 	
-	@Inject
-	public BlogReaderResource(BlogCrawler crawler, RequestSplitter splitter) {
+	
+	private void instatiateModelConnection() {
+		System.out.println("Init-----");
 		this.languageModel = OllamaStreamingChatModel.builder()
 				.baseUrl(modelUrl)
 				.modelName(modelName)
 				.timeout(Duration.ofHours(1))
 				.build();
+		System.out.println(this.languageModel);
 		this.llmService = AiServices.builder(LLMService.class)
 				.streamingChatLanguageModel(this.languageModel)
 				.chatMemory(MessageWindowChatMemory.withMaxMessages(10))
 				.build();
-		this.crawler = crawler;
-		this.splitter = splitter;
 	}
 	
 	 
@@ -59,6 +63,10 @@ public class BlogReaderResource {
     @POST
     @Produces(MediaType.TEXT_PLAIN)
     public String read(String url) {
+		if(llmService == null) {
+			instatiateModelConnection();
+		}
+		
         // Read the HTML from the specified URL
         String content = crawler.crawl(url);
 
