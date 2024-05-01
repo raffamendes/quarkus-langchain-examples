@@ -3,6 +3,8 @@ package com.rmendes.service.llm;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
+import io.quarkus.runtime.annotations.RegisterForReflection;
+
 
 
 public interface LLMService {
