@@ -3,7 +3,6 @@ package com.rmendes.service.llm;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
-import io.quarkus.runtime.annotations.RegisterForReflection;
 
 
 
@@ -17,10 +16,8 @@ public interface LLMService {
 
 	@UserMessage("""
 			    Here's the next part of the body page:
-			    ```html
 			    {html}
-			    ```
-			    Wait for the next parts. Don't answer anything else.
+			    Wait for the next parts. Don't return anything now.
 			""")
 	TokenStream sendBody(String html);
 
