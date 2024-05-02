@@ -13,7 +13,7 @@ public interface LLMService {
 	@UserMessage("""
 			    The body will be sent in parts in the next requests. Don't return anything.
 			""")
-	String prepare();
+	TokenStream prepare();
 
 	@UserMessage("""
 			    Here's the next part of the body page:
@@ -22,7 +22,7 @@ public interface LLMService {
 			    ```
 			    Wait for the next parts. Don't answer anything else.
 			""")
-	String sendBody(String html);
+	TokenStream sendBody(String html);
 
 	@UserMessage("""
 			    That's it. You can sum up the article and add key takeaways to the end of the sum up.

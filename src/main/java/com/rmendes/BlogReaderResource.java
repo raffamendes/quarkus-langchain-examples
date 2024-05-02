@@ -22,81 +22,66 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
-
 @Path("/")
 public class BlogReaderResource {
-	
+
 	private static final Logger LOGGER = LoggerFactory.getLogger(BlogReaderResource.class);
-	
+
 	private LLMService llmService;
-	
+
 	@Inject
 	private BlogCrawler crawler;
-	
+
 	@Inject
 	private RequestSplitter splitter;
-	
+
 	private StreamingChatLanguageModel languageModel;
-	
+
 	private static final String modelUrl = "http://localhost:11434";
-	
+
 	private static final String modelName = "llama2";
-	
-	
+
 	private void instatiateModelConnection() {
 		System.out.println("Init-----");
-		this.languageModel = OllamaStreamingChatModel.builder()
-				.baseUrl(modelUrl)
-				.modelName(modelName)
-				.timeout(Duration.ofHours(1))
-				.build();
+		this.languageModel = OllamaStreamingChatModel.builder().baseUrl(modelUrl).modelName(modelName)
+				.timeout(Duration.ofHours(1)).build();
 		System.out.println(this.languageModel);
-		this.llmService = AiServices.builder(LLMService.class)
-				.streamingChatLanguageModel(this.languageModel)
-				.chatMemory(MessageWindowChatMemory.withMaxMessages(10))
-				.build();
+		this.llmService = AiServices.builder(LLMService.class).streamingChatLanguageModel(this.languageModel)
+				.chatMemory(MessageWindowChatMemory.withMaxMessages(10)).build();
 	}
-	
-	 
+
 	@Path("/read")
-    @POST
-    @Produces(MediaType.TEXT_PLAIN)
-    public String read(String url) {
-		if(llmService == null) {
+	@POST
+	@Produces(MediaType.TEXT_PLAIN)
+	public String read(String url) {
+		if (llmService == null) {
 			instatiateModelConnection();
 		}
+
+		String content = crawler.crawl(url);
+
+		LOGGER.info("\uD83D\uDD1C Preparing analysis of {}", url);
 		
-        // Read the HTML from the specified URL
-        String content = crawler.crawl(url);
+		llmService.prepare();
 
-        LOGGER.info("\uD83D\uDD1C Preparing analysis of {}", url);
+		List<String> split = splitter.split(content);
 
-        // Prepare the model
-        llmService.prepare();
+		for (int i = 0; i < split.size(); i++) {
+			llmService.sendBody(split.get(i));
+			LOGGER.info("\uD83E\uDDD0 Analyzing article... Part {} out of {}.", (i + 1), split.size());
+		}
 
-        // Split the HTML into small pieces
-        List<String> split = splitter.split(content);
+		LOGGER.info("\uD83D\uDCDD Preparing response...");
 
-        // Send each piece of HTML to the LLM
-        for (int i = 0; i < split.size(); i++) {
-            llmService.sendBody(split.get(i));
-            LOGGER.info("\uD83E\uDDD0 Analyzing article... Part {} out of {}.", (i + 1), split.size());
-        }
+		TokenStream tokenStream = llmService.sumUp();
+		CompletableFuture<Void> future = new CompletableFuture<>();
+		tokenStream.onNext(System.out::print).onComplete(x -> {
+			System.out.println(x.toString());
+			future.complete(null);
+		}).onError(Throwable::printStackTrace).start();
 
-        LOGGER.info("\uD83D\uDCDD Preparing response...");
+		LOGGER.info("✅ Response for {} ready", url);
 
-        // Ask the model to sum up the article
-        TokenStream tokenStream = llmService.sumUp();
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        tokenStream.onNext(System.out::print)
-        .onComplete(x -> {
-        	System.out.println();
-        	future.complete(null);
-        }).onError(Throwable::printStackTrace).start();	
-
-        LOGGER.info("✅ Response for {} ready", url);
-
-        // Return the result to the user
-        return "";
-    }
+		return "";
+	}
 }
