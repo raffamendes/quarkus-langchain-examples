@@ -4,19 +4,29 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import org.jboss.resteasy.reactive.RestForm;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.rmendes.crawler.BlogCrawler;
+import com.rmendes.service.llm.LLMAviation;
 import com.rmendes.service.llm.LLMService;
 import com.rmendes.utils.RequestSplitter;
 
+import dev.langchain4j.data.document.Document;
+import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
+import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
+import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.TokenStream;
+import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
@@ -28,6 +38,8 @@ public class BlogReaderResource {
 	private static final Logger LOGGER = LoggerFactory.getLogger(BlogReaderResource.class);
 
 	private LLMService llmService;
+	
+	private LLMAviation llmAviation;
 
 	@Inject
 	private BlogCrawler crawler;
@@ -83,5 +95,29 @@ public class BlogReaderResource {
 		LOGGER.info("✅ Response for {} ready", url);
 
 		return "";
+	}
+	
+	@Path("/aviation-incidents")
+	@POST
+	@Produces(MediaType.TEXT_PLAIN)
+	public String getAviationIncidents(@RestForm String prompt) {
+		List<Document> documents = FileSystemDocumentLoader.loadDocuments("/home/rmendes/KG-RAG-datasets/ntsb-aviation-incident-accident-reports/data/v1/docs");
+		InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<TextSegment>();
+		EmbeddingStoreIngestor.ingest(documents, store);
+		this.llmAviation = AiServices.builder(LLMAviation.class)
+				.streamingChatLanguageModel(OllamaStreamingChatModel.builder().baseUrl(modelUrl).modelName(modelName).timeout(Duration.ofHours(1)).build())
+				.contentRetriever(EmbeddingStoreContentRetriever.from(store))
+				.build();
+		
+		llmAviation.prepare();
+		System.out.println(prompt);
+		TokenStream tokenStream = llmAviation.chat(prompt);
+		CompletableFuture<Void> future = new CompletableFuture<>();
+		tokenStream.onNext(System.out::print).onComplete(x -> {
+			System.out.println(x.toString());
+			future.complete(null);
+		}).onError(Throwable::printStackTrace).start();
+		return "";
+		
 	}
 }
