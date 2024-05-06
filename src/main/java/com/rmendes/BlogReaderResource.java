@@ -3,6 +3,7 @@ package com.rmendes;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import org.jboss.resteasy.reactive.RestForm;
 import org.slf4j.Logger;
@@ -24,6 +25,7 @@ import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
+import dev.langchain4j.model.embedding.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.bge.small.en.v15.BgeSmallEnV15QuantizedEmbeddingModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
@@ -34,6 +36,10 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+import dev.langchain4j.store.embedding.qdrant.QdrantEmbeddingStore;
+import io.qdrant.client.QdrantClient;
+import io.qdrant.client.QdrantGrpcClient;
+import io.qdrant.client.grpc.Collections;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -62,6 +68,12 @@ public class BlogReaderResource {
 	private static final String modelUrl = "http://localhost:11434";
 
 	private static final String modelName = "llama2";
+	
+	private static final Integer grpcPort = 6334;
+	
+	private static final String qdrantHost = "localhost";
+
+	private static final String COLLECTION_NAME = "naiveRagCollection";
 
 	@Path("/read")
 	@POST
@@ -138,6 +150,22 @@ public class BlogReaderResource {
 		return "";
 	}
 	
+	@Path("/naive-rag/qdrant/stock-infos")
+	@POST
+	@Produces(MediaType.TEXT_PLAIN)
+	public String getStockInfosQdrant(@RestForm String prompt, @RestForm String stockCode, @RestForm String year, @RestForm String quarter) {
+		this.llmStockInfos = instatiateNaiveRagModelQdrantStore(stockCode, year, quarter);
+		llmStockInfos.prepare();
+		System.out.println("prepared");
+		TokenStream tokenStream = llmStockInfos.chat(prompt);
+		CompletableFuture<Void> future = new CompletableFuture<>();
+		tokenStream.onNext(System.out::print).onComplete(x -> {
+			System.out.println(x.toString());
+			future.complete(null);
+		}).onError(Throwable::printStackTrace).start();
+		return "";
+	}
+	
 	private LLMStockInfos instatiateNaiveRagModel(String stockCode, String year, String quarter) {
 		DocumentParser docParser = new ApacheTikaDocumentParser();
 		Document doc = FileSystemDocumentLoader.loadDocument("/home/rmendes/KG-RAG-datasets/sec-10-q/data/v1/docs/"+year+" "+quarter+" "+stockCode+".pdf", docParser);
@@ -147,6 +175,34 @@ public class BlogReaderResource {
 		List<TextSegment> segments = docSplitter.split(doc);
 		List<Embedding> embeddings =  embeddingModel.embedAll(segments).content();
 		EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<TextSegment>();
+		embeddingStore.addAll(embeddings, segments);
+		ContentRetriever retriever = EmbeddingStoreContentRetriever.builder()
+				.embeddingStore(embeddingStore)
+				.embeddingModel(embeddingModel)
+				.maxResults(5)
+				.minScore(0.6)
+				.build();
+		return AiServices.builder(LLMStockInfos.class)
+				.streamingChatLanguageModel(getLanguageModel())
+				.contentRetriever(retriever)
+				.chatMemory(MessageWindowChatMemory.withMaxMessages(10))
+				.build();
+	}
+	
+	private LLMStockInfos instatiateNaiveRagModelQdrantStore(String stockCode, String year, String quarter) {
+		DocumentParser docParser = new ApacheTikaDocumentParser();
+		Document doc = FileSystemDocumentLoader.loadDocument("/home/rmendes/KG-RAG-datasets/sec-10-q/data/v1/docs/"+year+" "+quarter+" "+stockCode+".pdf", docParser);
+		//List<Document> docs = FileSystemDocumentLoader.loadDocuments("/home/rmendes/KG-RAG-datasets/us-fed-agency-reports/data/v1/docs/");
+		EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+		DocumentSplitter docSplitter = DocumentSplitters.recursive(200, 0);
+		List<TextSegment> segments = docSplitter.split(doc);
+		List<Embedding> embeddings =  embeddingModel.embedAll(segments).content();
+		//EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<TextSegment>();
+		EmbeddingStore<TextSegment> embeddingStore = QdrantEmbeddingStore.builder()
+				.host(qdrantHost)
+				.port(grpcPort)
+				.collectionName(COLLECTION_NAME).build();
+		createCollection();
 		embeddingStore.addAll(embeddings, segments);
 		ContentRetriever retriever = EmbeddingStoreContentRetriever.builder()
 				.embeddingStore(embeddingStore)
@@ -171,4 +227,14 @@ public class BlogReaderResource {
 		this.llmService = AiServices.builder(LLMService.class).streamingChatLanguageModel(this.languageModel)
 				.chatMemory(MessageWindowChatMemory.withMaxMessages(10)).build();
 	}
+	
+	private void createCollection() {
+		try (QdrantClient client = new QdrantClient(QdrantGrpcClient.newBuilder(qdrantHost, grpcPort, false).build())) {
+			client.createCollectionAsync(COLLECTION_NAME, Collections.VectorParams.newBuilder().setDistance(Collections.Distance.Cosine).setSize(384).build()).get();
+		} catch (InterruptedException | ExecutionException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	
 }
